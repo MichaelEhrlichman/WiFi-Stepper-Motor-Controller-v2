@@ -34,6 +34,7 @@ Please help and support this channel with Patreon: https://patreon.com/rehamradi
 #include <ESPAsyncWebServer.h> // https://github.com/me-no-dev/ESPAsyncWebServer
 #include <ESP8266mDNS.h>
 #include <Updater.h>
+#include <ezButton.h>
 #define U_PART U_FS
 
 //Constants
@@ -54,14 +55,24 @@ String AP_ID = "reHamRadio-AP";
 String AP_PW = "rehamradio";
 const char* host = "rehamradio";
 
+//Stand Alone
+IPAddress apIP(192,168,4,1);
+IPAddress netMsk(255,255,255,0);
+
 //Variables
 const int enablePin = 0;                            // ESP8266 digital pin 0
 const int stepPin = 4;                              // ESP8266 digital pin 4
 const int dirPin = 5;                               // ESP8266 digital pin 5
+const int hiLim = D7;
+const int loLim = D6;
 bool tuneStatus = false;
+bool enableStatus = false;
 String sliderValue = "2000";
 int sliderRange = 4400;
 const char* PARAM_INPUT = "value";
+
+ezButton limitSwitchHi(hiLim);
+ezButton limitSwitchLo(loLim);
 
 // HTML web page
 const char index_html[] PROGMEM = R"rawliteral(
@@ -98,6 +109,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             -ms-user-select: none;
             user-select: none;
             -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+            touch-action: manipulation;
         }
         .button:hover {
             background-color: #1f2e45
@@ -140,6 +152,25 @@ const char index_html[] PROGMEM = R"rawliteral(
         .slider::-moz-range-thumb:hover {
             background-color: #1f2e45
         }
+        .indicator-light {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 10px;
+            border: 2px solid #333;
+            transition: all 0.3s ease;
+          }
+          
+          .indicator-light.on {
+            background-color: #00ff00;
+            box-shadow: 0 0 10px #00ff00;
+          }
+          
+          .indicator-light.off {
+            background-color: #ff0000;
+            box-shadow: 0 0 10px #ff0000;
+          }
     </style>
     </head>
     <body>
@@ -149,13 +180,20 @@ const char index_html[] PROGMEM = R"rawliteral(
         <p>slow<input type="range" direction="ltr" onchange="updateSpeedSlider(this)" id="speedSlider" min="0"
                 max="4000" value="" step="1" class="slider">fast</p>
         <br>
-        <button class="button" onmousedown="toggleCheckbox('scanToggle');" ontouchstart="toggleCheckbox('scanToggle');">
-            SCAN </button>
+        <button class="button" onclick="toggleCheckbox('enableToggle');">
+            ENABLE </button>
+        &nbsp;&nbsp;
+        <span id="indicatorLight" class="indicator-light off"></span>
+        <span id="statusText">Disabled</span>
         <br><br><br>
+        <!--
         <button class="button" onmousedown="toggleCheckbox('leftOn');" ontouchstart="toggleCheckbox('leftOn');"
             onmouseup="toggleCheckbox('leftOff');" ontouchend="toggleCheckbox('leftOff');"><<<<</button>      
         <button class="button" onmousedown="toggleCheckbox('rightOn');" ontouchstart="toggleCheckbox('rightOn');"
             onmouseup="toggleCheckbox('rightOff');" ontouchend="toggleCheckbox('rightOff');">>>>></button>
+        -->
+        <button id="leftButton" class="button"><<<<</button>      
+        <button id="rightButton" class="button">>>>>></button>
         <br><br><hr>
         <font size="1"><center>Created by N6JJ - Community Version (v0.3.1-beta) 2023</center></font>
         <font size="1"><center><a href='https://www.youtube.com/c/reHamRadio' target='_blank'>re:HamRadio on YouTube</a></center></font>
@@ -163,6 +201,42 @@ const char index_html[] PROGMEM = R"rawliteral(
         <font size="1"><center><a href='https://github.com/tamirrosenberg/WiFi-Stepper-Motor-Controller-v2' target='_blank'>The project on GitHub</a></center></font>
         <font size="1"><center><a href='http://rehamradio.local/update'>Firmware Update</a></center></font>
         <script>
+            function setupButton(buttonId, onAction, offAction) {
+                const button = document.getElementById(buttonId);
+                let pressed = false;
+                
+                function startPress(e) {
+                    e.preventDefault();
+                    if (!pressed) {
+                        pressed = true;
+                        toggleCheckbox(onAction);
+                    }
+                }
+                
+                function endPress(e) {
+                    if (e) e.preventDefault();
+                    if (pressed) {
+                        pressed = false;
+                        toggleCheckbox(offAction);
+                    }
+                }
+                
+                // Touch events
+                button.addEventListener('touchstart', startPress, {passive: false});
+                button.addEventListener('touchend', endPress, {passive: false});
+                button.addEventListener('touchcancel', endPress);
+                
+                // Mouse events
+                button.addEventListener('mousedown', startPress);
+                button.addEventListener('mouseup', endPress);
+                button.addEventListener('mouseleave', endPress);
+            }
+            
+            // Setup both buttons
+            document.addEventListener('DOMContentLoaded', function() {
+                setupButton('leftButton', 'leftOn', 'leftOff');
+                setupButton('rightButton', 'rightOn', 'rightOff');
+            });
             function toggleCheckbox(x) {
                 var xhr = new XMLHttpRequest();
                 xhr.open("GET", "/" + x, true);
@@ -188,7 +262,25 @@ const char index_html[] PROGMEM = R"rawliteral(
                 xhttp.send();
             }
             setInterval(checkAndUpdateStatus, 75);
-    
+              function updateStatus() {
+              fetch('/getStatus')
+              .then(response => response.text())
+              .then(data => {
+                const isOn = (data === 'true');
+                const light = document.getElementById('indicatorLight');
+                const text = document.getElementById('statusText');
+                
+                if (isOn) {
+                  light.className = 'indicator-light on';
+                  text.textContent = 'Enabled';
+                } else {
+                  light.className = 'indicator-light off';
+                  text.textContent = 'Disabled';
+                }
+              });
+              }
+              setInterval(updateStatus, 250);
+              updateStatus(); // Initial update
         </script>
     </body>
 </html>)rawliteral";
@@ -257,34 +349,41 @@ void setup() {
   Serial.begin(115200);
   Serial.println(F("Initialize System..."));
 
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(apIP, apIP, netMsk);
+  WiFi.softAP(AP_ID, AP_PW);
+
   // WiFiManager
-  WiFiManager wm;
+  //Stand Alone WiFiManager wm;
    
-  bool res;
-  res = wm.autoConnect(AP_ID.c_str(),AP_PW.c_str()); // password protected access point
+  //bool res;
+  //res = wm.autoConnect(AP_ID.c_str(),AP_PW.c_str()); // password protected access point
   
-  if (drd.detect())
-     {
-         Serial.println("** Double reset boot **");
-         WiFi.disconnect();
-         wm.startConfigPortal(AP_ID.c_str(),AP_PW.c_str());
-         delay(1000);
-         ESP.restart();
-     }
+  //if (drd.detect())
+  //   {
+  //       Serial.println("** Double reset boot **");
+  //       WiFi.disconnect();
+  //       wm.startConfigPortal(AP_ID.c_str(),AP_PW.c_str());
+  //       delay(1000);
+  //       ESP.restart();
+  //   }
   
-  if(!res) {
-     Serial.println("Failed to connect");
-  } 
-  else {    
-     Serial.println("Connected!");
-  }
+  //if(!res) {
+  //   Serial.println("Failed to connect");
+  //} 
+  //else {    
+  //   Serial.println("Connected!");
+ // }
   
   // Declare pins as Outputs
   pinMode(stepPin, OUTPUT);                           // step pin
   pinMode(dirPin, OUTPUT);                            // direction pin
   pinMode(enablePin, OUTPUT);                         // enable pin
   pinMode(LED, OUTPUT);                               // onboard LED indicator
-  digitalWrite(enablePin, HIGH);                      // start with driver disable
+  digitalWrite(enablePin, LOW);                      // start with driver disable
+
+  limitSwitchHi.setDebounceTime(50);
+  limitSwitchLo.setDebounceTime(50);
   
   // Send web page to client
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -321,16 +420,16 @@ void setup() {
     request->send(200, "text/plain", "ok");
   });
 
-  // Button Scan Toggle
-  server.on("/scanToggle", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    Serial.println("Scan Toggle");
-    if (tuneStatus == false) {
-      tuneStatus = true;
+  // Enable Toggle
+  server.on("/enableToggle", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    Serial.println("Enable Toggle");
+    if (enableStatus == false) {
+      enableStatus = true;
     }
     else {
-      tuneStatus = false;
+      enableStatus = false;
     }
-    Serial.println({tuneStatus});
+    Serial.println({enableStatus});
     request->send(200, "text/plain", "ok");
   });
 
@@ -355,6 +454,19 @@ void setup() {
     }
     request->send(200, "text/plain", statusValue);
   });
+
+  server.on("/enableStatus", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    String inputMessage;
+    String statusValue = "Idle";
+    if(enableStatus){
+      statusValue = "Enabled...";
+    }
+    request->send(200, "text/plain", statusValue);
+  });
+  
+  server.on("/getStatus", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/plain", enableStatus ? "true" : "false");
+  });
   
   MDNS.begin(host);
   server.onNotFound(notFound);
@@ -368,19 +480,37 @@ void notFound(AsyncWebServerRequest *request) {
   request->send(404, "text/plain", "Hmm... something is wrong... :(");
 }
 
+void oneStep() {
+  digitalWrite(stepPin, HIGH);                           // perform a step
+  delayMicroseconds(5);
+  digitalWrite(stepPin, LOW);                            // stop the step 
+}
+
 void loop() {
+  limitSwitchHi.loop();
+  limitSwitchLo.loop();
   // -- Main Tuning Function --
+  if (enableStatus) {
+    digitalWrite(enablePin, LOW);
+  } else {
+    digitalWrite(enablePin, HIGH);
+  }
   if (tuneStatus) {
     digitalWrite(LED, LOW);                           // turn LED indicator OFF
-    digitalWrite(enablePin, LOW);
-    digitalWrite(stepPin, HIGH);                           // perform a step
-    delayMicroseconds(sliderRange-sliderValue.toInt());    // wait for the steps operation
-    digitalWrite(stepPin, LOW);                            // stop the step 
-    delayMicroseconds(sliderRange-sliderValue.toInt());    // wait between steps
+    printf("%d %d\n",limitSwitchHi.getState(),limitSwitchLo.getState());
+    //digitalWrite(enablePin, LOW);
+    if (digitalRead(dirPin)==HIGH && limitSwitchHi.getState()==0) {
+      oneStep();                           // perform a step
+    }
+    if (digitalRead(dirPin)==LOW && limitSwitchLo.getState()==0) {
+      oneStep();                           // perform a step
+    }
+    delayMicroseconds(2*(sliderRange-sliderValue.toInt()));    // wait between steps
   }
   else {
     digitalWrite(LED, HIGH);
-    digitalWrite(enablePin, HIGH);
+    //digitalWrite(enablePin, HIGH);
+    //digitalWrite(enablePin, LOW);
   }
   MDNS.update();
 }
